@@ -74,7 +74,11 @@ class {{.Name}} {
               .toList()
           : <{{.InternalType}}>[],
 		{{else if .IsRepeated }}
-		json['{{.JSONName}}'] != null ? (json['{{.JSONName}}'] as List).cast<{{.InternalType}}>() : <{{.InternalType}}>[],
+			{{ if .IsInt64 }}
+			json['{{.JSONName}}'] != null ? (json['{{.JSONName}}'] as List).map((e) => int.parse(e)).toList() : <{{.InternalType}}>[],
+			{{ else  }}
+			json['{{.JSONName}}'] != null ? (json['{{.JSONName}}'] as List).cast<{{.InternalType}}>() : <{{.InternalType}}>[],
+			{{ end }}
 		{{else if and (.IsMessage) (eq .Type "DateTime")}}
 		{{.Type}}.parse(json['{{.JSONName}}']),
 		{{else if and .IsMessage .IsOptional}}
@@ -129,14 +133,23 @@ abstract class {{.Name}} {
     {{- end}}
 }
 
+typedef Execute = Future<Response> Function(Request);
+
+typedef Middleware = Execute Function(API api, String methodName, Execute mw);
+
 class Default{{.Name}} implements {{.Name}} {
 	final String hostname;
     Requester _requester = Requester(Client());
 	final _pathPrefix = "/twirp/{{.Package}}.{{.Name}}/";
+	final List<Middleware> middleware;
 
-    Default{{.Name}}(this.hostname, {Requester? requester}) {
+	DefaultAPI(
+		this.hostname, {
+		Requester? requester,
+		this.middleware = const [],
+	}) {
 		if (requester != null) {
-			_requester = requester;
+		_requester = requester;
 		}
 	}
 
@@ -148,7 +161,14 @@ class Default{{.Name}} implements {{.Name}} {
     	final request = Request('POST', uri);
 		request.headers['Content-Type'] = 'application/json';
     	request.body = json.encode({{.InputArg}}.toJson());
-    	final response = await _requester.send(request);
+		Execute f;
+		f = (BaseRequest request) async {
+			return await _requester.send(request);
+		};
+		for (final m in middleware) {
+			f = m(this, '{{ .Name }}', f);
+		}
+		final response = await f(request);
 		if (response.statusCode != 200) {
      		throw twirpException(response);
     	}
